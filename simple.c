@@ -339,7 +339,6 @@ void tokenize(const char* text, Tokens* tokens) {
         }
 
         if (tk_kind == TK_NAME) {
-            printf("%c %d\n", c, isname(c));
             if (!isname(c)) {
                 size_t l = i-tk_start;
                 char* t = (char*)malloc(l+1);
