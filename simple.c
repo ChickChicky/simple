@@ -9,9 +9,15 @@
 #define STR_CAPACITY_DEFAULT 64
 #define STR_CAPACITY_GROW 16
 
+#define LEX_NODES_CAPACITY_DEFAULT 16
+#define LEX_NODES_CAPACITY_GROW 16
+
 #define ERR(msg,  ...) { printf(msg "%s\n", ##__VA_ARGS__, strerror(errno)); return errno; }
 #define TRY(expr, ...) { if (expr) ERR(__VA_ARGS__) }
 
+#define MALLOC(value) memcpy(malloc(sizeof(*(value))),value,sizeof(*(value)))
+
+// TODO: Refactor into enums
 #define TK_CHAR    1
 #define TK_STRING  2
 #define TK_NUMBER  3
@@ -34,6 +40,18 @@
 #define TK_SHR     20
 #define TK_SET     21
 #define TK_NOT     22
+
+#define LEX_ROOT     1
+#define LEX_TYPE     2
+
+#define NODE_ROOT     1
+#define NODE_TYPE     2
+#define NODE_DEF      3
+#define NODE_FUNCTION 4
+
+#define NODE_TYPE_UNIT    0
+#define NODE_TYPE_NAME    1
+#define NODE_TYPE_POINTER 2
 
 static inline int isnum(char c) {
     return c >= '0' && c <= '9';
@@ -111,10 +129,112 @@ typedef struct {
 } Tokens;
 
 typedef struct {
+    Tokens* tokens;
+    size_t i;
+} lex_state;
+
+typedef struct {
     char* str;
     size_t cap;
     size_t len;
 } str_t;
+
+typedef struct {
+    const char* message;
+} lex_error;
+
+typedef struct {
+    unsigned char kind;
+    void* data;
+} lex_node;
+
+typedef struct {
+    lex_node* nodes;
+    size_t cap;
+    size_t len;
+} lex_nodes;
+
+typedef struct {
+    lex_nodes children;
+} lex_node_root;
+
+typedef struct {
+    unsigned char kind;
+    void* data;
+} lex_node_type;
+
+typedef struct {
+    const char* name;
+    lex_node_type type;
+} lex_node_def;
+
+typedef struct {
+
+} lex_node_function;
+
+typedef struct {
+    unsigned char status;
+    union {
+        lex_error error;
+        lex_node node;
+    } result;
+} lex_result;
+
+lex_node_type lex_node_type_deref(lex_node_type* node) {
+    if (node->kind == NODE_TYPE_POINTER)
+        return *(lex_node_type*)(node->data);
+    return (lex_node_type){.kind=0};
+}
+
+lex_node_type lex_node_type_ref(lex_node_type* node) {
+    return (lex_node_type){.kind=NODE_TYPE_POINTER,.data=node};
+}
+
+static inline lex_result lex_result_error(const char* message) {
+    return (lex_result){
+        .status = 0,
+        .result = {
+            .error = (lex_error){
+                .message = message,
+            }
+        },
+    };
+}
+
+static inline lex_result lex_result_node(lex_node node) {
+    return (lex_result){
+        .status = 1,
+        .result = {
+            .node = node,
+        },
+    };
+}
+
+void lex_nodes_init(lex_nodes* nodes) {
+    nodes->len = 0;
+    nodes->cap = LEX_NODES_CAPACITY_DEFAULT;
+    nodes->nodes = (lex_node*)malloc(sizeof(lex_node)*nodes->cap);
+}
+
+void lex_nodes_grow(lex_nodes* nodes, const size_t new_capacity) {
+    lex_node* new_nodes = (lex_node*)malloc(sizeof(lex_node)*new_capacity);
+    memcpy(new_nodes, nodes->nodes, sizeof(lex_node)*nodes->cap);
+    free(nodes->nodes);
+    nodes->nodes = new_nodes;
+    nodes->cap = new_capacity;
+}
+
+void lex_nodes_push(lex_nodes* nodes, lex_node node) {
+    if (nodes->cap <= nodes->len)
+        lex_nodes_grow(nodes, nodes->len+LEX_NODES_CAPACITY_GROW);
+    nodes->nodes[nodes->len++] = node;
+}
+
+void lex_nodes_free(lex_nodes* nodes) {
+    nodes->len = 0;
+    nodes->cap = 0;
+    free(nodes->nodes);
+}
 
 void tokens_init(Tokens* tokens) {
     tokens->len = 0;
@@ -123,7 +243,7 @@ void tokens_init(Tokens* tokens) {
 }
 
 void tokens_grow(Tokens* tokens, const size_t new_capacity) {
-    Token* new_tokens = malloc(sizeof(Token)*new_capacity);
+    Token* new_tokens = (Token*)malloc(sizeof(Token)*new_capacity);
     memcpy(new_tokens, tokens->tokens, sizeof(Token)*tokens->cap);
     free(tokens->tokens);
     tokens->tokens = new_tokens;
@@ -143,6 +263,12 @@ int tokens_pop(Tokens *restrict tokens,Token *const restrict token) {
     if (token)
         *token = tk;
     return 0;
+}
+
+void tokens_free(Tokens* tokens) {
+    tokens->len = 0;
+    tokens->cap = 0;
+    free(tokens->tokens);
 }
 
 // Creates a new empty string
@@ -229,7 +355,6 @@ void tokenize(const char* text, Tokens* tokens) {
 
     unsigned long tk_num;
     str_t tk_str;
-
 
     int in_comment = 0;
 
@@ -444,8 +569,170 @@ void tokenize(const char* text, Tokens* tokens) {
     }
 }
 
+lex_result lex_util(lex_state* st, const unsigned char state) {
+    if (state == LEX_ROOT) {
+        lex_node_root root_node;
+        lex_nodes_init(&root_node.children);
+
+        while (st->i+1 < st->tokens->len) {
+            const Token tk = st->tokens->tokens[st->i];
+            
+            if (tk.k != TK_LPAREN || st->i+2 >= st->tokens->len) {
+                return lex_result_error("Expected an instruction");
+            }
+            
+            switch (st->tokens->tokens[st->i+1].k) {
+                case TK_NAME: {
+                    const char* const n = st->tokens->tokens[++st->i].t;
+                    
+                    if (!strcmp(n, "fn")) {
+                        
+                    } 
+                    
+                    else if (!strcmp(n, "def")) {
+                        if (st->i+1 > st->tokens->len)
+                            return lex_result_error("Unexpected EOF after 'def'");
+                        
+                        const Token name_tk = st->tokens->tokens[++st->i];
+                        if (name_tk.k != TK_NAME)
+                            return lex_result_error("Name expected after 'def'");
+
+                        st->i++;
+                        lex_result type_result = lex_util(st, LEX_TYPE);
+                        if (!type_result.status)
+                            return type_result;
+
+                        lex_node_type type = *(lex_node_type*)type_result.result.node.data;
+                        free(type_result.result.node.data);
+
+                        if (st->tokens->tokens[st->i++].k != TK_RPAREN)
+                            return lex_result_error("`)` expected after variable type");
+
+                        lex_node_def def = {
+                            .name = name_tk.t,
+                            .type = type
+                        };
+
+                        lex_nodes_push(&root_node.children,(lex_node){
+                            .kind = NODE_DEF,
+                            .data = MALLOC(&def),
+                        });
+                    } 
+                    
+                    else {
+                        return lex_result_error("Invalid keyword");
+                    }
+                } break;
+                
+                default: {
+                    return lex_result_error("Unexpected token");
+                } break;
+            }
+        }
+
+        return lex_result_node((lex_node){
+            .kind = NODE_ROOT,
+            .data = MALLOC(&root_node),
+        });
+    }
+    
+    if (state == LEX_TYPE) {
+        lex_node_type type_node = {
+            .kind = NODE_TYPE_UNIT,
+            .data = NULL
+        };
+
+        if (st->i >= st->tokens->len || st->tokens->tokens[st->i++].k != TK_LPAREN)
+            return lex_result_error("Type expressions must start with a `(`");
+
+        for (;;st->i++) {
+            if (st->i >= st->tokens->len)
+                return lex_result_error("Unfinished type expression");
+            
+            const Token tk = st->tokens->tokens[st->i];
+            
+            if (tk.k == TK_RPAREN)
+                break;
+
+            if (tk.k == TK_NAME) {
+                if (type_node.kind != NODE_TYPE_UNIT)
+                    return lex_result_error("Unexpected identifier");
+                type_node.kind = NODE_TYPE_NAME;
+                char* name = memcpy(malloc(strlen(tk.t)+1),tk.t,strlen(tk.t)+1);
+                type_node.data = name;
+            }
+
+            else if (tk.k == TK_MUL) {
+                if (type_node.kind == NODE_TYPE_UNIT)
+                    return lex_result_error("Unexpected star");
+                type_node = lex_node_type_ref(MALLOC(&type_node));
+            }
+
+            else {
+                return lex_result_error("Unexpected token");
+            }
+        }
+
+        return lex_result_node((lex_node){
+            .kind = NODE_TYPE,
+            .data = MALLOC(&type_node)
+        });
+    }
+
+    return lex_result_error("Invalid state");
+}
+
+lex_result lex(Tokens* tokens) {
+    lex_state st = {
+        .i = 0,
+        .tokens = tokens,
+    };
+    return lex_util(&st, LEX_ROOT);
+}
+
 const char* shift_args(int* argc, const char*** argv) {
     return (*argc)--, *(*argv)++;
+}
+
+void debug_ast_type(lex_node_type node) {
+    if (node.kind == NODE_TYPE_UNIT) {
+        printf("()");
+    }
+    else if (node.kind == NODE_TYPE_NAME) {
+        printf("%s", (const char*)node.data);
+    }
+    else if (node.kind == NODE_TYPE_POINTER) {
+        debug_ast_type(*(lex_node_type*)node.data);
+        printf("*");
+    }
+    else {
+        printf("\x1b[91m?\x1b[39m");
+    }
+}
+
+void debug_ast(lex_node node, int indent) {
+    if (node.kind == NODE_ROOT) {
+        lex_node_root* data = node.data;
+        printf("%*sROOT {\n", indent, "");
+        for (size_t i = 0; i < data->children.len; i++) {
+            debug_ast(data->children.nodes[i], indent+2);
+        }
+        printf("%*s}\n", indent, "");
+    }
+    else if (node.kind == NODE_DEF) {
+        lex_node_def* data = node.data;
+        printf("%*sDEF { %s\n", indent, "", data->name);
+        debug_ast((lex_node){.kind=NODE_TYPE,.data=&data->type}, indent+2);
+        printf("%*s}\n", indent, "");
+    }
+    else if (node.kind == NODE_TYPE) {
+        printf("%*sTYPE ", indent, "");
+        debug_ast_type(*(lex_node_type*)node.data);
+        printf("\n");
+    }
+    else {
+        printf("%*s\x1b[90m(Invalid node kind %d)\x1b[39m\n", indent, "", node.kind);
+    }
 }
 
 int main(int argc, const char** argv) {
@@ -466,6 +753,17 @@ int main(int argc, const char** argv) {
 
     TRY( fseek(f, 0, SEEK_END) );
     size_t source_len = ftell(f);
+    if (!source_len) {
+        printf("An empty program was provided\n");
+        printf(
+            "Try a simple one:\n"
+            "\x1b[90m|\x1b[39m(\x1b[91mfn\x1b[39m \x1b[96mmain\x1b[39m()\n"
+            "\x1b[90m|\x1b[39m  (\x1b[96mprintf\x1b[39m \x1b[92m\"Hello, world!\x1b[1m\\n\x1b[22m\"\x1b[39m)\n"
+            "\x1b[90m|\x1b[39m  (\x1b[91mreturn\x1b[39m \x1b[35m0\x1b[39m)\n"
+            "\x1b[90m|\x1b[39m)\n"
+        );
+        return 0;
+    }
     TRY( fseek(f, 0, SEEK_SET) );
     char* source = (char*)malloc(source_len);
     TRY( !fread(source, source_len, 1, f), "Failed to read: " );
@@ -475,7 +773,14 @@ int main(int argc, const char** argv) {
     tokens_init(&tokens);
     tokenize(source, &tokens);
 
-    printf("showing %zu tokens\n", tokens.len);
+    lex_result result = lex(&tokens);
+    
+    if (result.status == 0) {
+        printf("Syntax error:\n  %s\n", result.result.error.message);
+        return 1;
+    }
+
+    printf("showing %zu tokens:\n", tokens.len);
     for (size_t i = 0; i < tokens.len; i++) {
         Token tk = tokens.tokens[i];
         printf("  %02zu \x1b[92m%s\x1b[39m [%02x %s]\n", i, tk.t, tk.k, token_kind(tk.k));
@@ -491,6 +796,10 @@ int main(int argc, const char** argv) {
             printf("    %zu\n", num);
         }
     }
+    printf("end\n");
+
+    printf("showing AST:\n");
+    debug_ast(result.result.node, 0);
     printf("end\n");
 
     return 0;
