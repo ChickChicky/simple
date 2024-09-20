@@ -41,13 +41,16 @@
 #define TK_SET     21
 #define TK_NOT     22
 
-#define LEX_ROOT     1
-#define LEX_TYPE     2
+#define LEX_ROOT  1
+#define LEX_TYPE  2
+#define LEX_BLOCK 3
 
-#define NODE_ROOT     1
-#define NODE_TYPE     2
-#define NODE_DEF      3
-#define NODE_FUNCTION 4
+#define NODE_ROOT           1
+#define NODE_TYPE           2
+#define NODE_DEF            3
+#define NODE_FUNCTION       4
+#define NODE_FUNCTION_PARAM 5
+#define NODE_BLOCK          6
 
 #define NODE_TYPE_UNIT    0
 #define NODE_TYPE_NAME    1
@@ -169,8 +172,20 @@ typedef struct {
 } lex_node_def;
 
 typedef struct {
+    lex_nodes children;
+} lex_node_block;
 
-} lex_node_function;
+typedef struct {
+    const char* name;
+    lex_node_type type;
+    lex_nodes params;
+    lex_node_block body;
+} lex_node_fn;
+
+typedef struct {
+    const char* name;
+    lex_node_type type;
+} lex_node_fn_param;
 
 typedef struct {
     unsigned char status;
@@ -585,30 +600,85 @@ lex_result lex_util(lex_state* st, const unsigned char state) {
                 case TK_NAME: {
                     const char* const n = st->tokens->tokens[++st->i].t;
                     
-                    if (!strcmp(n, "fn")) {
-                        
-                    } 
-                    
-                    else if (!strcmp(n, "def")) {
-                        if (st->i+1 > st->tokens->len)
-                            return lex_result_error("Unexpected EOF after 'def'");
+                    if (st->i+1 > st->tokens->len)
+                        return lex_result_error("Unexpected EOF");
 
+                    if (!strcmp(n, "fn")) {
                         st->i++;
+
+                        lex_node_fn fn;
+                        lex_nodes_init(&fn.params);
+
+                        // TODO: Probably extract parsing of type + name into a separate function or node kind
                         lex_result type_result = lex_util(st, LEX_TYPE);
                         if (!type_result.status)
                             return type_result;
 
-                        lex_node_type type = *(lex_node_type*)type_result.result.node.data;
+                        fn.type = *(lex_node_type*)type_result.result.node.data;
                         free(type_result.result.node.data);
 
-                        lex_node_def def = {
-                            .type = type,
-                        };
+                        const Token name_tk = st->tokens->tokens[st->i++];
+                        if (name_tk.k != TK_NAME)
+                            return lex_result_error("Name expected after 'fn' type");
+                        fn.name = name_tk.t;
+
+                        if (st->tokens->tokens[st->i++].k != TK_LPAREN)
+                            return lex_result_error("Argument list expected after 'fn' name");
+
+                        while (st->tokens->tokens[st->i].k != TK_RPAREN) {
+                            if (st->i+1 > st->tokens->len)
+                                return lex_result_error("Unexpected EOF");
+
+                            lex_node_fn_param param;
+
+                            lex_result ptype_result = lex_util(st, LEX_TYPE);
+                            if (!ptype_result.status)
+                                return ptype_result;
+
+                            param.type = *(lex_node_type*)ptype_result.result.node.data;
+                            free(ptype_result.result.node.data);
+
+                            const Token name_tk = st->tokens->tokens[st->i++];
+                            if (name_tk.k != TK_NAME)
+                                return lex_result_error("Name expected after 'fn' parameter type");
+                            param.name = name_tk.t;
+
+                            lex_nodes_push(&fn.params,(lex_node){
+                                .kind = NODE_FUNCTION_PARAM,
+                                .data = MALLOC(&param),
+                            });
+                        }
+
+                        st->i++;
+
+                        lex_result body_result = lex_util(st, LEX_BLOCK);
+                        if (!body_result.status)
+                            return body_result;
+                        fn.body = *(lex_node_block*)body_result.result.node.data;
+                        free(body_result.result.node.data);
+
+                        st->i++;
+                        lex_nodes_push(&root_node.children,(lex_node){
+                            .kind = NODE_FUNCTION,
+                            .data = MALLOC(&fn),
+                        });
+                    }
+                    
+                    else if (!strcmp(n, "def")) {
+                        st->i++;
+
+                        lex_node_def def;
+
+                        lex_result type_result = lex_util(st, LEX_TYPE);
+                        if (!type_result.status)
+                            return type_result;
+
+                        def.type = *(lex_node_type*)type_result.result.node.data;
+                        free(type_result.result.node.data);
                         
                         const Token name_tk = st->tokens->tokens[st->i++];
                         if (name_tk.k != TK_NAME)
                             return lex_result_error("Name expected after 'def' type");
-
                         def.name = name_tk.t;
 
                         lex_nodes_push(&root_node.children,(lex_node){
@@ -679,6 +749,67 @@ lex_result lex_util(lex_state* st, const unsigned char state) {
         });
     }
 
+    if (state == LEX_BLOCK) {
+        lex_node_block block_node;
+        lex_nodes_init(&block_node.children);
+
+        while (st->i+1 < st->tokens->len) {
+            const Token tk = st->tokens->tokens[st->i];
+
+            if (tk.k == TK_RPAREN)
+                break;
+            
+            if (tk.k != TK_LPAREN || st->i+2 >= st->tokens->len) {
+                return lex_result_error("Expected an instruction");
+            }
+            
+            switch (st->tokens->tokens[st->i+1].k) {
+                case TK_NAME: {
+                    const char* const n = st->tokens->tokens[++st->i].t;
+                    
+                    if (st->i+1 > st->tokens->len)
+                        return lex_result_error("Unexpected EOF");
+
+                    if (!strcmp(n, "def")) {
+                        st->i++;
+
+                        lex_node_def def;
+
+                        lex_result type_result = lex_util(st, LEX_TYPE);
+                        if (!type_result.status)
+                            return type_result;
+
+                        def.type = *(lex_node_type*)type_result.result.node.data;
+                        free(type_result.result.node.data);
+                        
+                        const Token name_tk = st->tokens->tokens[st->i++];
+                        if (name_tk.k != TK_NAME)
+                            return lex_result_error("Name expected after 'def' type");
+                        def.name = name_tk.t;
+
+                        lex_nodes_push(&block_node.children,(lex_node){
+                            .kind = NODE_DEF,
+                            .data = MALLOC(&def),
+                        });
+                    }
+
+                    else {
+                        return lex_result_error("Invalid keyword");
+                    }
+                } break;
+                
+                default: {
+                    return lex_result_error("Unexpected token");
+                } break;
+            }
+        }
+
+        return lex_result_node((lex_node){
+            .kind = NODE_TYPE,
+            .data = MALLOC(&block_node)
+        });
+    }
+
     return lex_result_error("Invalid state");
 }
 
@@ -713,7 +844,7 @@ void debug_ast_type(lex_node_type node) {
 void debug_ast(lex_node node, int indent) {
     if (node.kind == NODE_ROOT) {
         lex_node_root* data = node.data;
-        printf("%*sROOT {\n", indent, "");
+        printf("%*s\x1b[91;1mROOT\x1b[39;22m {\n", indent, "");
         for (size_t i = 0; i < data->children.len; i++) {
             debug_ast(data->children.nodes[i], indent+2);
         }
@@ -721,14 +852,39 @@ void debug_ast(lex_node node, int indent) {
     }
     else if (node.kind == NODE_DEF) {
         lex_node_def* data = node.data;
-        printf("%*sDEF { %s\n", indent, "", data->name);
-        debug_ast((lex_node){.kind=NODE_TYPE,.data=&data->type}, indent+2);
-        printf("%*s}\n", indent, "");
+        printf("%*s\x1b[91;1mDEF\x1b[39;22m \x1b[94m", indent, "");
+        debug_ast_type(data->type);
+        printf(" \x1b[39m\x1b[95;1m%s\x1b[39;22m", data->name);
+        printf("\n");
     }
     else if (node.kind == NODE_TYPE) {
-        printf("%*sTYPE ", indent, "");
+        printf("%*s\x1b[91;1mTYPE\x1b[39;22m ", indent, "");
         debug_ast_type(*(lex_node_type*)node.data);
         printf("\n");
+    }
+    else if (node.kind == NODE_FUNCTION) {
+        lex_node_fn* data = node.data;
+        printf("%*s\x1b[91;1mFN\x1b[39;22m \x1b[94m", indent, "");
+        debug_ast_type(data->type);
+        printf("\x1b[39m \x1b[95;1m%s\x1b[39;22m {\n", data->name);
+        for (size_t i = 0; i < data->params.len; i++)
+            debug_ast(data->params.nodes[i], indent+2);
+        debug_ast((lex_node){.kind=NODE_BLOCK,.data=&data->body}, indent+2);
+        printf("%*s}\n", indent, "");
+    }
+    else if (node.kind == NODE_FUNCTION_PARAM) {
+        lex_node_fn_param* data = node.data;
+        printf("%*s\x1b[91;1mPARAM\x1b[39;22m \x1b[94m", indent, "");
+        debug_ast_type(data->type);
+        printf("\x1b[39m \x1b[95;1m%s\x1b[39;22m\n", data->name);
+    }
+    else if (node.kind == NODE_BLOCK) {
+        lex_node_root* data = node.data;
+        printf("%*s\x1b[91;1mBLOCK\x1b[39;22m {\n", indent, "");
+        for (size_t i = 0; i < data->children.len; i++) {
+            debug_ast(data->children.nodes[i], indent+2);
+        }
+        printf("%*s}\n", indent, "");
     }
     else {
         printf("%*s\x1b[90m(Invalid node kind %d)\x1b[39m\n", indent, "", node.kind);
