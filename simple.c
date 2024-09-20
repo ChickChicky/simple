@@ -601,9 +601,6 @@ lex_result lex_util(lex_state* st, const unsigned char state) {
                         lex_node_type type = *(lex_node_type*)type_result.result.node.data;
                         free(type_result.result.node.data);
 
-                        if (st->tokens->tokens[st->i++].k != TK_RPAREN)
-                            return lex_result_error("`)` expected after variable type");
-
                         lex_node_def def = {
                             .type = type,
                         };
@@ -652,8 +649,10 @@ lex_result lex_util(lex_state* st, const unsigned char state) {
             
             const Token tk = st->tokens->tokens[st->i];
             
-            if (tk.k == TK_RPAREN)
+            if (tk.k == TK_RPAREN) {
+                st->i++;
                 break;
+            }
 
             if (tk.k == TK_NAME) {
                 if (type_node.kind != NODE_TYPE_UNIT)
