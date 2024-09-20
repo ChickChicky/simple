@@ -592,10 +592,6 @@ lex_result lex_util(lex_state* st, const unsigned char state) {
                     else if (!strcmp(n, "def")) {
                         if (st->i+1 > st->tokens->len)
                             return lex_result_error("Unexpected EOF after 'def'");
-                        
-                        const Token name_tk = st->tokens->tokens[++st->i];
-                        if (name_tk.k != TK_NAME)
-                            return lex_result_error("Name expected after 'def'");
 
                         st->i++;
                         lex_result type_result = lex_util(st, LEX_TYPE);
@@ -609,9 +605,14 @@ lex_result lex_util(lex_state* st, const unsigned char state) {
                             return lex_result_error("`)` expected after variable type");
 
                         lex_node_def def = {
-                            .name = name_tk.t,
-                            .type = type
+                            .type = type,
                         };
+                        
+                        const Token name_tk = st->tokens->tokens[st->i++];
+                        if (name_tk.k != TK_NAME)
+                            return lex_result_error("Name expected after 'def' type");
+
+                        def.name = name_tk.t;
 
                         lex_nodes_push(&root_node.children,(lex_node){
                             .kind = NODE_DEF,
