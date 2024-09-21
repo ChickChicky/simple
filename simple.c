@@ -18,43 +18,52 @@
 #define MALLOC(value) memcpy(malloc(sizeof(*(value))),value,sizeof(*(value)))
 
 // TODO: Refactor into enums
-#define TK_CHAR    1
-#define TK_STRING  2
-#define TK_NUMBER  3
-#define TK_NAME    4
-#define TK_LPAREN  5
-#define TK_RPAREN  6
-#define TK_ADD     7
-#define TK_SUB     8
-#define TK_MUL     9
-#define TK_DIV     10
-#define TK_EQ      11
-#define TK_NE      12
-#define TK_GT      13
-#define TK_GE      14
-#define TK_LT      15
-#define TK_LE      16
-#define TK_INC     17
-#define TK_DEC     18
-#define TK_SHL     19
-#define TK_SHR     20
-#define TK_SET     21
-#define TK_NOT     22
+typedef enum {
+    TK_CHAR = 1,
+    TK_STRING,
+    TK_NUMBER,
+    TK_NAME,
+    TK_LPAREN,
+    TK_RPAREN,
+    TK_ADD,
+    TK_SUB,
+    TK_MUL,
+    TK_DIV,
+    TK_EQ,
+    TK_NE,
+    TK_GT,
+    TK_GE,
+    TK_LT,
+    TK_LE,
+    TK_INC,
+    TK_DEC,
+    TK_SHL,
+    TK_SHR,
+    TK_SET,
+    TK_NOT,
+} token_kind;
 
-#define LEX_ROOT  1
-#define LEX_TYPE  2
-#define LEX_BLOCK 3
+typedef enum {
+    LEX_ROOT = 1,
+    LEX_TYPE,
+    LEX_BLOCK,
+    LEX_EXPR,
+} lex_type;
 
-#define NODE_ROOT           1
-#define NODE_TYPE           2
-#define NODE_DEF            3
-#define NODE_FUNCTION       4
-#define NODE_FUNCTION_PARAM 5
-#define NODE_BLOCK          6
+typedef enum {
+    NODE_ROOT = 1,
+    NODE_TYPE,
+    NODE_DEF,
+    NODE_FUNCTION,
+    NODE_FUNCTION_PARAM,
+    NODE_BLOCK,
+} node_kind;
 
-#define NODE_TYPE_UNIT    0
-#define NODE_TYPE_NAME    1
-#define NODE_TYPE_POINTER 2
+typedef enum {
+    NODE_TYPE_UNIT = 0,
+    NODE_TYPE_NAME,
+    NODE_TYPE_POINTER,
+} node_kind_type;
 
 static inline int isnum(char c) {
     return c >= '0' && c <= '9';
@@ -86,7 +95,7 @@ static inline int isname(char c) {
     return isnamei(c) || isnum(c);
 }
 
-const char* token_kind(unsigned char kind) {
+const char* token_kind_str(token_kind kind) {
     switch (kind) {
         case TK_CHAR: return "TK_CHAR";
         case TK_STRING: return "TK_STRING";
@@ -121,7 +130,7 @@ typedef struct {
     const char* t;
     size_t l;
     size_t c;
-    unsigned char k;
+    token_kind k;
     void* d;
 } Token;
 
@@ -162,7 +171,7 @@ typedef struct {
 } lex_node_root;
 
 typedef struct {
-    unsigned char kind;
+    node_kind_type kind;
     void* data;
 } lex_node_type;
 
@@ -188,7 +197,7 @@ typedef struct {
 } lex_node_fn_param;
 
 typedef struct {
-    unsigned char status;
+    unsigned char status; // TODO: Mabe give this a better type
     union {
         lex_error error;
         lex_node node;
@@ -366,7 +375,7 @@ void tokenize(const char* text, Tokens* tokens) {
 
     size_t tk_start = 0;
     size_t tk_esc = 0;
-    unsigned char tk_kind = 0;
+    token_kind tk_kind = 0;
 
     unsigned long tk_num;
     str_t tk_str;
@@ -377,7 +386,7 @@ void tokenize(const char* text, Tokens* tokens) {
     size_t col = 0;
 
     for (size_t i = 0; i < len; i++) {
-        char c = text[i];
+        const char c = text[i];
 
         col++;
         if (c == '\n') {
@@ -525,7 +534,7 @@ void tokenize(const char* text, Tokens* tokens) {
             c == '>' ||
             c == '<'
         ) {
-            unsigned char kind = 0;
+            token_kind kind = 0;
 
             int skip = 0;
             
@@ -584,7 +593,7 @@ void tokenize(const char* text, Tokens* tokens) {
     }
 }
 
-lex_result lex_util(lex_state* st, const unsigned char state) {
+lex_result lex_util(lex_state* st, const lex_type state) {
     if (state == LEX_ROOT) {
         lex_node_root root_node;
         lex_nodes_init(&root_node.children);
@@ -939,11 +948,11 @@ int main(int argc, const char** argv) {
     printf("showing %zu tokens:\n", tokens.len);
     for (size_t i = 0; i < tokens.len; i++) {
         Token tk = tokens.tokens[i];
-        printf("  %02zu \x1b[92m%s\x1b[39m [%02x %s]\n", i, tk.t, tk.k, token_kind(tk.k));
+        printf("  %02zu \x1b[92m%s\x1b[39m [%02x %s]\n", i, tk.t, tk.k, token_kind_str(tk.k));
         if (tk.k == TK_STRING) {
             str_t str = *(str_t*)tk.d;
             for (size_t j = 0; j < str.len; j++) {
-                char c = str.str[j];
+                const char c = str.str[j];
                 printf("    %02zu %02x\n", j, c);
             }
         }
@@ -955,7 +964,7 @@ int main(int argc, const char** argv) {
     printf("end\n");
 
     printf("showing AST:\n");
-    debug_ast(result.result.node, 0);
+    debug_ast(result.result.node, 2);
     printf("end\n");
 
     return 0;
