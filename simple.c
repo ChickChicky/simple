@@ -1,3 +1,5 @@
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -57,6 +59,11 @@ typedef enum {
     NODE_FUNCTION,
     NODE_FUNCTION_PARAM,
     NODE_BLOCK,
+    NODE_EXPR,
+    NODE_NAME,
+    NODE_NUMBER,
+    NODE_BINOP,
+    NODE_UNOP
 } node_kind;
 
 typedef enum {
@@ -65,7 +72,7 @@ typedef enum {
     NODE_TYPE_POINTER,
 } node_kind_type;
 
-static inline int isnum(char c) {
+static inline bool isnum(char c) {
     return c >= '0' && c <= '9';
 }
 
@@ -73,7 +80,7 @@ static inline int isalpha(char c) {
     return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
 }
 
-static inline int ishex(char c) {
+static inline bool ishex(char c) {
     return (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') || ishex(c) || isnum(c);
 }
 
@@ -87,11 +94,11 @@ static inline unsigned char hexnum(char c) {
     return 0;
 }
 
-static inline int isnamei(char c) {
+static inline bool isnamei(char c) {
     return isalpha(c) || c == '_';
 }
 
-static inline int isname(char c) {
+static inline bool isname(char c) {
     return isnamei(c) || isnum(c);
 }
 
@@ -190,6 +197,17 @@ typedef struct {
     lex_nodes params;
     lex_node_block body;
 } lex_node_fn;
+
+typedef struct {
+    Token op;
+    lex_node lhs;
+    lex_node rhs;
+} lex_node_binop;
+
+typedef struct {
+    Token op;
+    lex_node value;
+} lex_node_unop;
 
 typedef struct {
     const char* name;
@@ -368,6 +386,14 @@ void str_push(str_t* str, char c) {
         str->str = new_str;
     }
     str->str[str->len++] = c;
+}
+
+char* strdup(const char* str) {
+    const size_t l = strlen(str);
+    char* new = (char*)malloc(l);
+    memcpy(new, str, l);
+    new[l] = 0;
+    return new;
 }
 
 void tokenize(const char* text, Tokens* tokens) {
@@ -737,8 +763,7 @@ lex_result lex_util(lex_state* st, const lex_type state) {
                 if (type_node.kind != NODE_TYPE_UNIT)
                     return lex_result_error("Unexpected identifier");
                 type_node.kind = NODE_TYPE_NAME;
-                char* name = memcpy(malloc(strlen(tk.t)+1),tk.t,strlen(tk.t)+1);
-                type_node.data = name;
+                type_node.data = strdup(tk.t);
             }
 
             else if (tk.k == TK_MUL) {
@@ -762,7 +787,11 @@ lex_result lex_util(lex_state* st, const lex_type state) {
         lex_node_block block_node;
         lex_nodes_init(&block_node.children);
 
-        while (st->i+1 < st->tokens->len) {
+        for (;;) {
+            if (st->i >= st->tokens->len) {
+                return lex_result_error("Unexpected EOF");
+            }
+
             const Token tk = st->tokens->tokens[st->i];
 
             if (tk.k == TK_RPAREN)
@@ -772,6 +801,7 @@ lex_result lex_util(lex_state* st, const lex_type state) {
                 return lex_result_error("Expected an instruction");
             }
             
+            bool invalid = false;
             switch (st->tokens->tokens[st->i+1].k) {
                 case TK_NAME: {
                     const char* const n = st->tokens->tokens[++st->i].t;
@@ -796,6 +826,9 @@ lex_result lex_util(lex_state* st, const lex_type state) {
                             return lex_result_error("Name expected after 'def' type");
                         def.name = name_tk.t;
 
+                        if (st->tokens->tokens[st->i++].k != TK_RPAREN)
+                            return lex_result_error("Expected `)` to close 'def'");
+
                         lex_nodes_push(&block_node.children,(lex_node){
                             .kind = NODE_DEF,
                             .data = MALLOC(&def),
@@ -803,13 +836,21 @@ lex_result lex_util(lex_state* st, const lex_type state) {
                     }
 
                     else {
-                        return lex_result_error("Invalid keyword");
+                        st->i--;
+                        invalid = true;
                     }
                 } break;
                 
                 default: {
-                    return lex_result_error("Unexpected token");
+                    invalid = true;
                 } break;
+            }
+            
+            if (invalid) {
+                lex_result expr_result = lex_util(st, LEX_EXPR);
+                if (!expr_result.status)
+                    return expr_result;
+                lex_nodes_push(&block_node.children, expr_result.result.node);
             }
         }
 
@@ -817,6 +858,95 @@ lex_result lex_util(lex_state* st, const lex_type state) {
             .kind = NODE_TYPE,
             .data = MALLOC(&block_node)
         });
+    }
+
+    if (state == LEX_EXPR) {
+        const Token hook = st->tokens->tokens[st->i++];
+
+        if (hook.k == TK_NAME)
+            return lex_result_node((lex_node){
+                .kind = NODE_NAME,
+                .data = strdup(hook.t)
+            });
+        
+        if (hook.k == TK_NUMBER)
+            return lex_result_node((lex_node){
+                .kind = NODE_NUMBER,
+                .data = MALLOC(&hook.d),
+            });
+
+        if (hook.k == TK_LPAREN) {
+            if (st->i+1 > st->tokens->len)
+                return lex_result_error("Unexpected EOF");
+
+            const Token opr = st->tokens->tokens[st->i++];
+
+            if (
+                opr.k == TK_ADD ||
+                opr.k == TK_MUL ||
+                opr.k == TK_SUB ||
+                opr.k == TK_DIV ||
+                opr.k == TK_SET
+            ) {
+                lex_nodes args;
+                lex_nodes_init(&args);
+
+                for (;;) {
+                    if (st->i+1 > st->tokens->len)
+                        return lex_result_error("Unexpected EOF");
+
+                    if (st->tokens->tokens[st->i].k == TK_RPAREN)
+                        break;
+
+                    lex_result arg_result = lex_util(st, LEX_EXPR);
+                    if (!arg_result.status)
+                        return arg_result;
+                    lex_nodes_push(&args, arg_result.result.node);
+                }
+
+                if (args.len <= 0)
+                    return lex_result_error("Too few arguments");
+
+                if (
+                    opr.k == TK_ADD ||
+                    opr.k == TK_MUL ||
+                    opr.k == TK_SUB ||
+                    opr.k == TK_DIV ||
+                    opr.k == TK_SET
+                ) {
+                    if (args.len > 2)
+                        return lex_result_error("Too many arguments");
+
+                    if (opr.k == TK_SET && args.len < 2)
+                        return lex_result_error("Too few arguments");
+                    
+                    if (args.len == 1) {
+                        lex_node_unop node_unop = {
+                            .op = opr,
+                            .value = args.nodes[0],
+                        };
+                        return lex_result_node((lex_node){
+                            .kind = NODE_UNOP,
+                            .data = MALLOC(&node_unop)
+                        });
+                    }
+
+                    if (args.len == 2) {
+                        lex_node_binop node_binop = {
+                            .op = opr,
+                            .lhs = args.nodes[0],
+                            .rhs = args.nodes[1],
+                        };
+                        return lex_result_node((lex_node){
+                            .kind = NODE_BINOP,
+                            .data = MALLOC(&node_binop)
+                        });
+                    }
+                }
+            }
+        }
+
+        return lex_result_error("Unexpected token");
     }
 
     return lex_result_error("Invalid state");
@@ -894,6 +1024,19 @@ void debug_ast(lex_node node, int indent) {
             debug_ast(data->children.nodes[i], indent+2);
         }
         printf("%*s}\n", indent, "");
+    }
+    else if (node.kind == NODE_BINOP) {
+        lex_node_binop* data = node.data;
+        printf("%*s\x1b[91;1mBINOP\x1b[39;22m \x1b[96m%s\x1b[39m {\n", indent, "", data->op.t);
+        debug_ast(data->lhs, indent+2);
+        debug_ast(data->rhs, indent+2);
+        printf("%*s}\n", indent, "");
+    }
+    else if (node.kind == NODE_NAME) {
+        printf("%*s\x1b[91;1mNAME\x1b[39;22m \x1b[95;1m%s\x1b[39;22m\n", indent, "", (const char*)node.data);
+    }
+    else if (node.kind == NODE_NUMBER) {
+        printf("%*s\x1b[91;1mNUMBER\x1b[39;22m \x1b[93m%d\x1b[39m\n", indent, "", *(int*)node.data);
     }
     else {
         printf("%*s\x1b[90m(Invalid node kind %d)\x1b[39m\n", indent, "", node.kind);
