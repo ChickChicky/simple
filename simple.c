@@ -938,13 +938,6 @@ int main(int argc, const char** argv) {
     tokens_init(&tokens);
     tokenize(source, &tokens);
 
-    lex_result result = lex(&tokens);
-    
-    if (result.status == 0) {
-        printf("Syntax error:\n  %s\n", result.result.error.message);
-        return 1;
-    }
-
     printf("showing %zu tokens:\n", tokens.len);
     for (size_t i = 0; i < tokens.len; i++) {
         Token tk = tokens.tokens[i];
@@ -962,6 +955,13 @@ int main(int argc, const char** argv) {
         }
     }
     printf("end\n");
+
+    lex_result result = lex(&tokens);
+    
+    if (result.status == 0) {
+        printf("Syntax error:\n  %s\n", result.result.error.message);
+        return 1;
+    }
 
     printf("showing AST:\n");
     debug_ast(result.result.node, 2);
