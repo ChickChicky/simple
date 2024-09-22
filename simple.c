@@ -502,7 +502,7 @@ void tokenize(const char* text, Tokens* tokens) {
                 size_t l = i-tk_start;
                 char* t = (char*)malloc(l+1);
                 t[l] = 0;
-                memmove(t, text+tk_start, l);
+                memcpy(t, text+tk_start, l);
                 unsigned long* d = (unsigned long*)malloc(sizeof(long));
                 *d = tk_num;
                 tokens_push(tokens, (Token){.t=t,.c=col,.l=row,.k=tk_kind,.d=d});
@@ -538,6 +538,7 @@ void tokenize(const char* text, Tokens* tokens) {
             tk_kind = TK_NUMBER;
             tk_num = 0;
             tk_start = i;
+            i--;
             continue;
         }
 
@@ -872,7 +873,7 @@ lex_result lex_util(lex_state* st, const lex_type state) {
         if (hook.k == TK_NUMBER)
             return lex_result_node((lex_node){
                 .kind = NODE_NUMBER,
-                .data = MALLOC(&hook.d),
+                .data = MALLOC((long*)hook.d),
             });
 
         if (hook.k == TK_LPAREN) {
@@ -895,8 +896,10 @@ lex_result lex_util(lex_state* st, const lex_type state) {
                     if (st->i+1 > st->tokens->len)
                         return lex_result_error("Unexpected EOF");
 
-                    if (st->tokens->tokens[st->i].k == TK_RPAREN)
+                    if (st->tokens->tokens[st->i].k == TK_RPAREN) {
+                        st->i++;
                         break;
+                    }
 
                     lex_result arg_result = lex_util(st, LEX_EXPR);
                     if (!arg_result.status)
@@ -1036,7 +1039,7 @@ void debug_ast(lex_node node, int indent) {
         printf("%*s\x1b[91;1mNAME\x1b[39;22m \x1b[95;1m%s\x1b[39;22m\n", indent, "", (const char*)node.data);
     }
     else if (node.kind == NODE_NUMBER) {
-        printf("%*s\x1b[91;1mNUMBER\x1b[39;22m \x1b[93m%d\x1b[39m\n", indent, "", *(int*)node.data);
+        printf("%*s\x1b[91;1mNUMBER\x1b[39;22m \x1b[93m%zi\x1b[39m\n", indent, "", *(long*)node.data);
     }
     else {
         printf("%*s\x1b[90m(Invalid node kind %d)\x1b[39m\n", indent, "", node.kind);
